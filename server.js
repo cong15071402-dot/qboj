@@ -1,0 +1,159 @@
+const http=require("http"),fs=require("fs"),path=require("path"),crypto=require("crypto");
+const PORT=process.env.PORT||3000,DB=process.env.DATABASE_URL,FILE=path.join(__dirname,"data.json");
+const BUILTIN=JSON.parse(fs.readFileSync(path.join(__dirname,"problems.json"),"utf8"));
+let S={users:{},subs:[],cp:[],secret:crypto.randomBytes(24).toString("hex")},pool=null;
+
+/* ---------- lưu trữ: Postgres nếu có DATABASE_URL, nếu không thì file data.json ---------- */
+async function init(){
+  if(DB){
+    const {Pool}=require("pg");
+    pool=new Pool({connectionString:DB,ssl:{rejectUnauthorized:false}});
+    await pool.query("create table if not exists kv(k text primary key,v jsonb not null)");
+    const r=await pool.query("select v from kv where k='state'");
+    if(r.rows[0])S=Object.assign(S,r.rows[0].v);
+  }else if(fs.existsSync(FILE))S=Object.assign(S,JSON.parse(fs.readFileSync(FILE,"utf8")));
+  await save();
+}
+let chain=Promise.resolve();
+function save(){
+  chain=chain.then(async()=>{try{
+    if(pool)await pool.query("insert into kv(k,v) values('state',$1) on conflict(k) do update set v=excluded.v",[JSON.stringify(S)]);
+    else fs.writeFileSync(FILE,JSON.stringify(S));
+  }catch(e){console.error("save lỗi:",e.message)}});
+  return chain;
+}
+
+/* ---------- đăng nhập ---------- */
+const sign=s=>crypto.createHmac("sha256",S.secret).update(s).digest("hex");
+const mk=u=>{const t=u+"."+(Date.now()+30*864e5);return Buffer.from(t).toString("base64url")+"."+sign(t)};
+function who(req){
+  const [b,g]=(req.headers.authorization||"").slice(7).split(".");
+  if(!b||!g)return null;
+  const t=Buffer.from(b,"base64url").toString(),i=t.lastIndexOf("."),a=sign(t);
+  if(g.length!==a.length||!crypto.timingSafeEqual(Buffer.from(g),Buffer.from(a)))return null;
+  const u=t.slice(0,i);
+  return +t.slice(i+1)>Date.now()&&Object.hasOwn(S.users,u)?u:null;
+}
+const hp=(p,salt)=>crypto.scryptSync(p,salt,32).toString("hex");
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const h=s=>esc(s).replace(/\n/g,"<br>");
+
+/* ---------- chấm bài: biên dịch g++ thật qua Judge0 CE, dự phòng Wandbox ---------- */
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function post(url,body,tries=3){
+  for(let k=0;k<tries;k++){
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
+    if((r.status===429||r.status>=500)&&k<tries-1){await sleep(1500*(k+1));continue}
+    return r;
+  }
+  throw new Error("busy");
+}
+async function runJudge0(code,input){
+  const t0=Date.now(),J="https://ce.judge0.com";
+  const r=await post(J+"/submissions?base64_encoded=false&wait=true",{source_code:code,language_id:54,stdin:input});
+  let d=await r.json();
+  if(!r.ok&&!d.token)throw new Error("judge0 "+r.status);
+  for(let n=0;(!d.status||d.status.id<=2)&&d.token&&n<20;n++){
+    await sleep(1000);d=await(await fetch(J+"/submissions/"+d.token+"?base64_encoded=false")).json();
+  }
+  const id=d.status?d.status.id:0,ms=Math.max(1,Math.round((parseFloat(d.time)||0)*1000)||Date.now()-t0);
+  if(id===6)return{v:"CE",msg:d.compile_output||"Lỗi biên dịch",ms};
+  if(id===5)return{v:"TLE",ms};
+  if(id>=7&&id<=12)return{v:"RTE",msg:String(d.stderr||d.message||d.status.description||""),ms};
+  if(id===3||id===4)return{out:d.stdout||"",ms};
+  throw new Error("judge0 status "+id);
+}
+async function runWandbox(code,input){
+  const t0=Date.now();
+  const r=await post("https://wandbox.org/api/compile.json",{code,compiler:"gcc-head",stdin:input,"compiler-option-raw":"-std=c++17\n-O2"},2);
+  if(!r.ok)throw new Error("wandbox "+r.status);
+  const d=await r.json(),ms=Math.max(1,Date.now()-t0);
+  if(d.program_output==null&&d.compiler_error)return{v:"CE",msg:d.compiler_error,ms};
+  if(d.signal)return{v:/kill|time/i.test(d.signal)?"TLE":"RTE",msg:d.signal+"\n"+(d.program_error||""),ms};
+  if(d.status&&String(d.status)!=="0")return{v:"RTE",msg:d.program_error||"Exit code "+d.status,ms};
+  return{out:d.program_output||"",ms};
+}
+async function runCpp(code,input){
+  try{return await runJudge0(code,input)}
+  catch(e){console.error("judge0:",e.message);return await runWandbox(code,input)}
+}
+const norm=s=>s.split("\n").map(x=>x.trimEnd()).join("\n").trim();
+async function judge(p,code){
+  const r=[];let v="AC",msg="",maxms=0;
+  for(let i=0;i<p.T.length;i++){
+    const x=await runCpp(code,p.T[i][0]+"\n");
+    maxms=Math.max(maxms,x.ms);
+    if(x.v==="CE"){v="CE";msg=x.msg;p.T.forEach(()=>r.push("CE"));break}
+    if(x.v){r.push(x.v);if(v==="AC"||v==="WA"){v=x.v;msg=x.msg||""}}
+    else if(norm(x.out)===norm(p.T[i][1]))r.push("AC");
+    else{r.push("WA");if(v==="AC")v="WA"}
+    await sleep(250);
+  }
+  return{v,msg,r,okc:r.filter(x=>x==="AC").length,n:p.T.length,ms:maxms};
+}
+
+/* ---------- API ---------- */
+const all=()=>BUILTIN.concat(S.cp);
+const pub=p=>({id:p.id,t:p.t,pt:p.pt,tg:p.tg,s:p.s,inp:p.inp,out:p.out,ex:p.ex});
+const last={};
+const srv=http.createServer(async(req,res)=>{
+  const send=(c,o)=>{res.writeHead(c,{"Content-Type":"application/json; charset=utf-8"});res.end(JSON.stringify(o))};
+  try{
+    const url=req.url.split("?")[0];
+    if(req.method==="GET"&&(url==="/"||url==="/index.html")){
+      res.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});return res.end(fs.readFileSync(path.join(__dirname,"index.html")));
+    }
+    if(url==="/healthz")return send(200,{ok:1});
+    if(!url.startsWith("/api/"))return send(404,{error:"Not found"});
+    let b={};
+    if(req.method==="POST"){let s="";for await(const c of req){s+=c;if(s.length>200000)return send(413,{error:"Dữ liệu quá lớn."})}b=JSON.parse(s||"{}")}
+    const me=who(req);
+
+    if(url==="/api/data")return send(200,{me,problems:all().map(pub),subs:S.subs.slice(0,3000),users:Object.keys(S.users)});
+
+    if(url==="/api/register"||url==="/api/login"){
+      const u=String(b.u||""),p=String(b.p||"");
+      if(!/^[A-Za-z0-9_]{3,20}$/.test(u)||u.startsWith("__"))return send(400,{error:"Tên đăng nhập không hợp lệ."});
+      if(url==="/api/register"){
+        if(p.length<6||p.length>100)return send(400,{error:"Mật khẩu cần 6–100 ký tự."});
+        if(Object.hasOwn(S.users,u))return send(409,{error:"Tên đăng nhập đã tồn tại."});
+        const salt=crypto.randomBytes(12).toString("hex");S.users[u]={salt,h:hp(p,salt)};await save();
+        return send(200,{u,token:mk(u)});
+      }
+      const x=Object.hasOwn(S.users,u)?S.users[u]:null;
+      if(!x||hp(p,x.salt)!==x.h)return send(401,{error:"Sai tên đăng nhập hoặc mật khẩu."});
+      return send(200,{u,token:mk(u)});
+    }
+
+    if(!me)return send(401,{error:"Bạn cần đăng nhập."});
+
+    if(url==="/api/problem"){
+      const id=String(b.id||""),t=String(b.t||"").trim().slice(0,80);
+      if(!/^[a-z0-9]{2,20}$/.test(id))return send(400,{error:"Mã bài gồm 2–20 ký tự: chữ thường không dấu và số."});
+      if(all().some(p=>p.id===id))return send(409,{error:"Mã bài đã tồn tại."});
+      if(S.cp.filter(p=>p.u===me).length>=20)return send(400,{error:"Bạn đã đăng tối đa 20 bài."});
+      const f=k=>String(b[k]||"").trim().slice(0,5000);
+      if(!t||!f("s")||!f("inp")||!f("out"))return send(400,{error:"Hãy điền tên bài, đề bài, dữ liệu vào và kết quả ra."});
+      const T=f("tests").split(/\n-{3,}\n/).map(x=>x.split(/\n={3,}\n/).map(y=>y.trim()));
+      if(!f("tests")||T.length>10||T.some(x=>x.length!==2||!x[1]))return send(400,{error:"Test chưa đúng định dạng (tối đa 10 test)."});
+      S.cp.push({id,t:esc(t),pt:Math.min(100,Math.max(1,+b.pt||10)),tg:f("tg")?f("tg").split(",").map(x=>esc(x.trim())).filter(Boolean).slice(0,5):["Khác"],s:h(f("s")),inp:h(f("inp")),out:h(f("out")),ex:T[0],T,u:me});
+      await save();return send(200,{ok:1});
+    }
+
+    if(url==="/api/submit"){
+      const p=all().find(x=>x.id===b.pid),code=String(b.code||"");
+      if(!p)return send(404,{error:"Không tìm thấy bài."});
+      if(!code.trim()||code.length>50000)return send(400,{error:"Mã nguồn trống hoặc quá dài (tối đa 50000 ký tự)."});
+      if(Date.now()-(last[me]||0)<5000)return send(429,{error:"Bạn nộp quá nhanh, hãy đợi vài giây."});
+      last[me]=Date.now();
+      let result;
+      try{result=await judge(p,code)}catch(e){console.error("judge:",e.message);return send(503,{error:"Máy chủ chấm bài đang bận hoặc lỗi. Thử lại sau ít phút (lần nộp này chưa được tính)."})}
+      const sub={u:me,p:p.id,v:result.v,ok:result.okc,n:result.n,ms:result.ms,at:new Date().toISOString()};
+      S.subs.unshift(sub);S.subs=S.subs.slice(0,5000);await save();
+      return send(200,{result,sub});
+    }
+    send(404,{error:"Not found"});
+  }catch(e){console.error(e);send(400,{error:"Yêu cầu không hợp lệ."})}
+});
+init().then(()=>srv.listen(PORT,()=>console.log("QBOJ chạy ở cổng",PORT,DB?"(Postgres)":"(file data.json)")))
+  .catch(e=>{console.error("Không khởi động được:",e.message);process.exit(1)});

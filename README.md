@@ -1,18 +1,15 @@
-# QBOJ – Hệ thống chấm bài C++ trực tuyến
+# QBOJ – Hệ thống chấm bài C++ trực tuyến (có server)
 
-Web tĩnh (1 file `index.html`), chạy hoàn toàn trên trình duyệt.
+- `server.js`: máy chủ Node.js (không cần thư viện, trừ `pg` khi dùng Postgres)
+- `index.html`: giao diện
+- `problems.json`: các bài có sẵn (kèm test ẩn, chỉ nằm trên server)
 
-## Đăng lên Render (miễn phí)
-1. Tạo repo GitHub mới, upload 3 file: `index.html`, `render.yaml`, `README.md`.
-2. Vào https://render.com → đăng nhập bằng GitHub.
-3. **New +** → **Static Site** → chọn repo vừa tạo.
-4. Điền:
-   - Build Command: để trống (hoặc `echo ok`)
-   - Publish Directory: `.`
-5. **Create Static Site** → chờ 1–2 phút, nhận link `https://<tên>.onrender.com`.
+Server lo: tài khoản (mật khẩu băm scrypt), bài nộp, bài đăng thêm, bảng xếp hạng dùng chung,
+và chấm bài bằng g++ thật qua Judge0 CE (dự phòng Wandbox).
 
-Mỗi lần `git push`, Render tự deploy lại.
-
-## Lưu ý
-- Tài khoản, bài nộp, bài tự đăng lưu trong `localStorage` của từng trình duyệt: người khác không thấy dữ liệu của bạn.
-- Bộ chấm chạy bằng JSCPP (thông dịch C++ một phần), không hỗ trợ đầy đủ STL/thuật toán nặng.
+## Chạy trên Render (Web Service, Free)
+1. Đưa toàn bộ file trong thư mục này lên GitHub.
+2. Render → New + → Web Service → chọn repo. Runtime: Node, Build: `npm install`, Start: `node server.js`, Instance: Free.
+3. Để dữ liệu không bị mất: tạo DB miễn phí ở neon.tech, copy connection string,
+   thêm vào Render → Environment: `DATABASE_URL` = chuỗi đó.
+   (Không có DATABASE_URL thì dữ liệu lưu vào file và MẤT khi Render khởi động lại.)

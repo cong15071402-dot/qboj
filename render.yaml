@@ -1,7 +1,11 @@
 services:
   - type: web
     name: qboj
-    runtime: static
-    buildCommand: echo "Không cần build"
-    staticPublishPath: .
-    pullRequestPreviewsEnabled: false
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
