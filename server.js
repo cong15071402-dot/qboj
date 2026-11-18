@@ -39,6 +39,7 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",
 const h=s=>esc(s).replace(/\n/g,"<br>");
 
 /* ---------- chấm bài: biên dịch g++ thật qua Judge0 CE, dự phòng Wandbox ---------- */
+const JUDGE0=process.env.JUDGE0_URL||"https://ce.judge0.com";
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function post(url,body,tries=3){
   for(let k=0;k<tries;k++){
@@ -49,19 +50,40 @@ async function post(url,body,tries=3){
   throw new Error("busy");
 }
 async function runJudge0(code,input){
-  const t0=Date.now(),J="https://ce.judge0.com";
+  const t0=Date.now(),J=JUDGE0;
   const r=await post(J+"/submissions?base64_encoded=false&wait=true",{source_code:code,language_id:54,stdin:input});
   let d=await r.json();
   if(!r.ok&&!d.token)throw new Error("judge0 "+r.status);
   for(let n=0;(!d.status||d.status.id<=2)&&d.token&&n<20;n++){
     await sleep(1000);d=await(await fetch(J+"/submissions/"+d.token+"?base64_encoded=false")).json();
   }
+  return verdict(d,t0);
+}
+function verdict(d,t0){
   const id=d.status?d.status.id:0,ms=Math.max(1,Math.round((parseFloat(d.time)||0)*1000)||Date.now()-t0);
   if(id===6)return{v:"CE",msg:d.compile_output||"Lỗi biên dịch",ms};
   if(id===5)return{v:"TLE",ms};
   if(id>=7&&id<=12)return{v:"RTE",msg:String(d.stderr||d.message||d.status.description||""),ms};
   if(id===3||id===4)return{out:d.stdout||"",ms};
   throw new Error("judge0 status "+id);
+}
+/* gửi nhiều test trong 1 yêu cầu gộp: ít lượt gọi hơn nên ít bị giới hạn tốc độ */
+async function runBatch(code,inputs){
+  const t0=Date.now();
+  const r=await post(JUDGE0+"/submissions/batch?base64_encoded=false",{submissions:inputs.map(i=>({source_code:code,language_id:54,stdin:i}))},4);
+  const toks=await r.json();
+  if(!r.ok||!Array.isArray(toks)||toks.some(t=>!t.token))throw new Error("batch "+r.status);
+  const tk=toks.map(t=>t.token);
+  for(let n=0;n<40;n++){
+    await sleep(1500);
+    const g=await fetch(JUDGE0+"/submissions/batch?base64_encoded=false&fields=token,stdout,stderr,compile_output,status,time,message&tokens="+tk.join(","));
+    if(!g.ok)continue;
+    const d=await g.json(),by={};
+    if(!d.submissions||!d.submissions.every(x=>x.status&&x.status.id>2))continue;
+    d.submissions.forEach(x=>by[x.token]=x);
+    return tk.map(t=>verdict(by[t],t0));
+  }
+  throw new Error("batch timeout");
 }
 async function runWandbox(code,input){
   const t0=Date.now();
@@ -78,17 +100,30 @@ async function runCpp(code,input){
   catch(e){console.error("judge0:",e.message);return await runWandbox(code,input)}
 }
 const norm=s=>s.split("\n").map(x=>x.trimEnd()).join("\n").trim();
+function chunks(p){
+  const c=[];let cur=[],size=0;
+  p.T.forEach((t,k)=>{if(cur.length&&(cur.length>=10||size+t[0].length>300000)){c.push(cur);cur=[];size=0}cur.push(k);size+=t[0].length});
+  if(cur.length)c.push(cur);return c;
+}
 async function judge(p,code){
-  const r=[];let v="AC",msg="",maxms=0;
-  for(let i=0;i<p.T.length;i++){
-    const x=await runCpp(code,p.T[i][0]+"\n");
-    maxms=Math.max(maxms,x.ms);
-    if(x.v==="CE"){v="CE";msg=x.msg;p.T.forEach(()=>r.push("CE"));break}
-    if(x.v){r.push(x.v);if(v==="AC"||v==="WA"){v=x.v;msg=x.msg||""}}
-    else if(norm(x.out)===norm(p.T[i][1]))r.push("AC");
-    else{r.push("WA");if(v==="AC")v="WA"}
-    await sleep(250);
+  const outs=new Array(p.T.length);let batchOk=true;
+  for(const c of chunks(p)){
+    if(batchOk){
+      try{const rs=await runBatch(code,c.map(k=>p.T[k][0]+"\n"));c.forEach((k,j)=>outs[k]=rs[j])}
+      catch(e){console.error("batch:",e.message);batchOk=false}
+    }
+    if(!batchOk)for(const k of c){if(!outs[k]){outs[k]=await runCpp(code,p.T[k][0]+"\n");await sleep(400)}}
+    if(outs[c[0]]&&outs[c[0]].v==="CE")break;
   }
+  const r=[];let v="AC",msg="",maxms=0;
+  const ce=outs.find(x=>x&&x.v==="CE");
+  if(ce){p.T.forEach(()=>r.push("CE"));return{v:"CE",msg:ce.msg,r,okc:0,n:p.T.length,ms:ce.ms}}
+  outs.forEach((x,k)=>{
+    maxms=Math.max(maxms,x.ms);
+    if(x.v){r.push(x.v);if(v==="AC"||v==="WA"){v=x.v;msg=x.msg||""}}
+    else if(norm(x.out)===norm(p.T[k][1]))r.push("AC");
+    else{r.push("WA");if(v==="AC")v="WA"}
+  });
   return{v,msg,r,okc:r.filter(x=>x==="AC").length,n:p.T.length,ms:maxms};
 }
 
@@ -132,10 +167,10 @@ const srv=http.createServer(async(req,res)=>{
       if(!/^[a-z0-9]{2,20}$/.test(id))return send(400,{error:"Mã bài gồm 2–20 ký tự: chữ thường không dấu và số."});
       if(all().some(p=>p.id===id))return send(409,{error:"Mã bài đã tồn tại."});
       if(S.cp.filter(p=>p.u===me).length>=20)return send(400,{error:"Bạn đã đăng tối đa 20 bài."});
-      const f=k=>String(b[k]||"").trim().slice(0,5000);
+      const f=k=>String(b[k]||"").trim().slice(0,k==="tests"?40000:5000);
       if(!t||!f("s")||!f("inp")||!f("out"))return send(400,{error:"Hãy điền tên bài, đề bài, dữ liệu vào và kết quả ra."});
       const T=f("tests").split(/\n-{3,}\n/).map(x=>x.split(/\n={3,}\n/).map(y=>y.trim()));
-      if(!f("tests")||T.length>10||T.some(x=>x.length!==2||!x[1]))return send(400,{error:"Test chưa đúng định dạng (tối đa 10 test)."});
+      if(!f("tests")||T.length>30||T.some(x=>x.length!==2||!x[1]))return send(400,{error:"Test chưa đúng định dạng (tối đa 30 test, tổng 40000 ký tự)."});
       S.cp.push({id,t:esc(t),pt:Math.min(100,Math.max(1,+b.pt||10)),tg:f("tg")?f("tg").split(",").map(x=>esc(x.trim())).filter(Boolean).slice(0,5):["Khác"],s:h(f("s")),inp:h(f("inp")),out:h(f("out")),ex:T[0],T,u:me});
       await save();return send(200,{ok:1});
     }
