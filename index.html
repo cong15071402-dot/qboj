@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QBOJ – Hệ thống chấm bài C++ trực tuyến</title>
+<style>
+:root{--bg:#f2f4f7;--sf:#fff;--tx:#212529;--mu:#6c757d;--bd:#dee2e6;--nav:#1b3a5c;--ac:#1d6fb8;--ac2:#e7f1fa;--ok:#198754;--bad:#c62828;--warn:#b26a00;--ed:#0f1b2a;--edt:#e6edf5;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10161d;--sf:#18212b;--tx:#e4e9ee;--mu:#93a1ae;--bd:#2a3744;--nav:#0c2540;--ac:#5aa9ee;--ac2:#172a3d;--ok:#4cc38a;--bad:#ff8077;--warn:#f0b955;--ed:#0a1119;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#10161d;--sf:#18212b;--tx:#e4e9ee;--mu:#93a1ae;--bd:#2a3744;--nav:#0c2540;--ac:#5aa9ee;--ac2:#172a3d;--ok:#4cc38a;--bad:#ff8077;--warn:#f0b955;--ed:#0a1119;color-scheme:dark}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.55 system-ui,"Segoe UI",Roboto,sans-serif}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--nav);z-index:30}
+a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--nav)}
+.bar{max-width:1100px;margin:auto;display:flex;align-items:center;gap:4px;padding:6px 14px;flex-wrap:wrap}
+.logo{color:#fff;font-weight:800;font-size:20px;margin-right:12px}.logo:hover{text-decoration:none}
+nav{display:flex;flex:1;flex-wrap:wrap}nav a,.bar .r a,.bar .r button{color:#cfe0f1;padding:8px 12px;border-radius:6px;background:none;border:0;cursor:pointer;font:inherit}
+nav a.on,nav a:hover,.bar .r a:hover,.bar .r button:hover{background:rgba(255,255,255,.14);color:#fff;text-decoration:none}
+.r{display:flex;align-items:center;gap:2px;flex-wrap:wrap}
+main{max-width:1100px;margin:auto;padding:20px 14px 50px}
+h1{font-size:26px;margin:0 0 12px}h2{font-size:17px;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
+.mu{color:var(--mu)}.card{background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:16px;margin-bottom:14px}
+.tw{overflow-x:auto;background:var(--sf);border:1px solid var(--bd);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:560px}th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{background:var(--ac2);font-size:13px}tr:last-child td{border:0}tbody tr:hover{background:var(--ac2)}
+.btn{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:8px 16px;font:inherit;font-weight:600;cursor:pointer}
+@media (prefers-color-scheme:dark){.btn{color:#06192b}}
+.btn.g{background:transparent;color:var(--tx);border:1px solid var(--bd)}.btn:disabled{opacity:.5}
+:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+input,select,textarea{font:inherit;color:var(--tx);background:var(--sf);border:1px solid var(--bd);border-radius:6px;padding:8px 10px;width:100%}
+label{display:block;margin:10px 0 4px;font-weight:600;font-size:14px}
+.tools{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}.tools input{flex:1;min-width:180px}.tools select{width:auto}
+.split{display:grid;grid-template-columns:1.2fr 1fr;gap:14px;align-items:start}
+@media (max-width:820px){.split{grid-template-columns:1fr}}
+.io{background:var(--ed);color:var(--edt);border-radius:6px;padding:10px 12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;margin:0 0 8px}
+.code{min-height:340px;background:var(--ed);color:var(--edt);font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;tab-size:4;white-space:pre;resize:vertical}
+.tag{display:inline-block;background:var(--ac2);color:var(--ac);border-radius:4px;padding:0 7px;font-size:12px;margin-right:4px}
+.AC{color:var(--ok);font-weight:700}.WA,.RTE,.CE{color:var(--bad);font-weight:700}.TLE{color:var(--warn);font-weight:700}
+.tc{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.tc span{border:1px solid var(--bd);border-radius:4px;padding:2px 8px;font-size:13px}
+.form{max-width:380px;margin:30px auto}.err{color:var(--bad);margin:8px 0 0;min-height:1.4em}
+.me{background:var(--ac2)}
+</style>
+</head>
+<body>
+<header><div class="bar">
+<a class="logo" href="#problems">QBOJ</a>
+<nav id="nav"><a href="#problems" data-r="problems">Bài tập</a><a href="#submissions" data-r="submissions">Bài nộp</a><a href="#ranking" data-r="ranking">Thành viên</a><a href="#newproblem" data-r="newproblem">Đăng bài</a></nav>
+<div class="r" id="auth"></div><button id="theme" aria-label="Đổi giao diện sáng/tối" style="color:#cfe0f1;background:none;border:0;cursor:pointer;padding:8px">◐</button>
+</div></header>
+<main id="app"></main>
+<script>
+const P=[
+{id:"sum2",t:"Tổng hai số",pt:10,tg:["Nhập xuất"],s:"Cho hai số nguyên a và b. In ra a + b.",inp:"Một dòng gồm hai số nguyên a, b (|a|, |b| ≤ 10^9).",out:"Một số nguyên là tổng a + b.",ex:["3 5","8"],T:[["3 5","8"],["-4 10","6"],["1000000000 1000000000","2000000000"],["0 0","0"]]},
+{id:"chanle",t:"Chẵn hay lẻ",pt:10,tg:["Số học"],s:"Cho số nguyên n. In EVEN nếu n chẵn, ngược lại in ODD.",inp:"Một số nguyên n (|n| ≤ 10^18).",out:"EVEN hoặc ODD.",ex:["7","ODD"],T:[["7","ODD"],["10","EVEN"],["0","EVEN"],["-3","ODD"]]},
+{id:"maxarr",t:"Số lớn nhất",pt:10,tg:["Mảng"],s:"Cho dãy gồm n số nguyên. Tìm giá trị lớn nhất của dãy.",inp:"Dòng 1: n (1 ≤ n ≤ 1000). Dòng 2: n số nguyên.",out:"Giá trị lớn nhất.",ex:["5\n3 9 2 7 1","9"],T:[["5\n3 9 2 7 1","9"],["1\n-5","-5"],["3\n-1 -2 -3","-1"],["4\n10 10 10 10","10"]]},
+{id:"doixung",t:"Xâu đối xứng",pt:20,tg:["Xâu"],s:"Cho một xâu s gồm chữ cái thường. Kiểm tra s có phải xâu đối xứng (palindrome) không.",inp:"Một dòng chứa xâu s (độ dài ≤ 1000).",out:"In YES nếu đối xứng, ngược lại in NO.",ex:["level","YES"],T:[["level","YES"],["abc","NO"],["a","YES"],["abba","YES"],["abca","NO"]]},
+{id:"nto",t:"Đếm số nguyên tố",pt:20,tg:["Số học","Sàng"],s:"Đếm số lượng số nguyên tố trong đoạn từ 1 đến n.",inp:"Một số nguyên n (1 ≤ n ≤ 5000).",out:"Số lượng số nguyên tố ≤ n.",ex:["10","4"],T:[["10","4"],["1","0"],["100","25"],["1000","168"]]},
+{id:"fibmod",t:"Fibonacci modulo",pt:30,tg:["Quy hoạch động"],s:"Dãy Fibonacci có F1 = F2 = 1, F(k) = F(k-1) + F(k-2). Tính F(n) mod 10^9+7.",inp:"Một số nguyên n (1 ≤ n ≤ 5000).",out:"F(n) mod 10^9+7.",ex:["10","55"],T:[["10","55"],["1","1"],["2","1"],["50","586268941"]]}
+];
+const TPL=`#include <iostream>\n#include <string>\nusing namespace std;\n\nint main() {\n    \n    return 0;\n}\n`;
+const $=s=>document.querySelector(s),app=$("#app");
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
+const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+let U=ld("qb_users",{}),SUBS=ld("qb_subs",[]),ME=ld("qb_me",null),CODE=ld("qb_code",{});
+if(ME&&!U[ME])ME=null;
+let CP=ld("qb_cp",[]);P.push(...CP);
+const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+const hash=async(p,salt)=>hex(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(salt+":"+p)));
+const solved=u=>new Set(SUBS.filter(s=>s.u===u&&s.v==="AC").map(s=>s.p));
+const pts=u=>[...solved(u)].reduce((a,id)=>a+P.find(p=>p.id===id).pt,0);
+const pcs=id=>{const a=SUBS.filter(s=>s.p===id);return a.length?Math.round(100*a.filter(s=>s.v==="AC").length/a.length):0};
+
+function authBar(){
+  $("#auth").innerHTML=ME?`<a href="#submissions">${esc(ME)}</a><button id="lo">Đăng xuất</button>`:`<a href="#login">Đăng nhập</a><a href="#register">Đăng ký</a>`;
+  if(ME)$("#lo").onclick=()=>{ME=null;sv("qb_me",null);authBar();location.hash="#login"};
+}
+function route(){
+  const h=(location.hash||"#problems").slice(1),r=h.split("-")[0];
+  document.querySelectorAll("#nav a").forEach(a=>a.classList.toggle("on",a.dataset.r===(r==="problem"?"problems":r)));
+  authBar();({problems,problem,ranking,submissions,login,register,newproblem}[r]||problems)(h.slice(r.length+1));window.scrollTo(0,0);
+}
+function problems(){
+  app.innerHTML=`<h1>Bài tập</h1><div class="tools"><input id="q" placeholder="Tìm theo tên hoặc dạng bài…" aria-label="Tìm bài tập"></div>
+  <div class="tw"><table><thead><tr><th>Mã bài</th><th>Tên bài</th><th>Dạng bài</th><th>Điểm</th><th>% AC</th><th>Trạng thái</th></tr></thead><tbody id="tb"></tbody></table></div>`;
+  const draw=()=>{const q=$("#q").value.toLowerCase(),S=ME?solved(ME):new Set();
+    const L=P.filter(p=>(p.t+p.id+p.tg.join(" ")).toLowerCase().includes(q));
+    $("#tb").innerHTML=L.length?L.map(p=>`<tr><td class="mu">${p.id}</td><td><a href="#problem-${p.id}"><b>${p.t}</b></a></td><td>${p.tg.map(t=>`<span class="tag">${t}</span>`).join("")}</td><td>${p.pt}</td><td>${pcs(p.id)}%</td><td>${S.has(p.id)?'<span class="AC">✔ Đã giải</span>':ME&&SUBS.some(s=>s.u===ME&&s.p===p.id)?'<span class="mu">Đã thử</span>':'<span class="mu">–</span>'}</td></tr>`).join(""):`<tr><td colspan="6" class="mu">Không có bài phù hợp.</td></tr>`};
+  $("#q").oninput=draw;draw();
+}
+function problem(id){
+  const p=P.find(x=>x.id===id);if(!p){app.innerHTML='<h1>Không tìm thấy bài</h1><a href="#problems">Về danh sách bài</a>';return}
+  app.innerHTML=`<a href="#problems" class="mu">← Danh sách bài</a><h1 style="margin-top:6px">${p.t}</h1>
+  <p class="mu">Giới hạn: 5 giây/test · Ngôn ngữ: C++ · Điểm: ${p.pt} · ${p.tg.join(", ")}</p>
+  <div class="split"><div class="card"><h2>Đề bài</h2><p>${p.s}</p><h2>Dữ liệu vào</h2><p>${p.inp}</p><h2>Kết quả ra</h2><p>${p.out}</p><h2>Ví dụ</h2><div class="io">${esc(p.ex[0])}</div><div class="io">${esc(p.ex[1])}</div></div>
+  <div class="card"><h2>Nộp bài (C++)</h2>${ME?"":'<p class="mu">Bạn cần <a href="#login">đăng nhập</a> để nộp bài.</p>'}
+  <textarea class="code" id="code" spellcheck="false" aria-label="Mã nguồn C++"></textarea>
+  <div style="margin-top:10px"><button class="btn" id="go">Nộp bài</button> <button class="btn g" id="rs">Mẫu</button></div><div id="res" aria-live="polite"></div></div></div>`;
+  const c=$("#code");c.value=CODE[p.id]||TPL;
+  c.oninput=()=>{CODE[p.id]=c.value;sv("qb_code",CODE)};
+  c.onkeydown=e=>{if(e.key==="Tab"){e.preventDefault();c.setRangeText("    ",c.selectionStart,c.selectionEnd,"end")}};
+  $("#rs").onclick=()=>{c.value=TPL;c.oninput()};
+  $("#go").onclick=()=>{if(!ME){location.hash="#login";return}judge(p,c.value)};
+}
+const J0="https://ce.judge0.com";
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function fj(url,opt,tries){
+  for(let k=0;k<tries;k++){
+    const r=await fetch(url,opt);
+    if(r.status===429&&k<tries-1){await sleep(1500*(k+1));continue}
+    if(r.status>=500&&k<tries-1){await sleep(800);continue}
+    return r;
+  }
+  throw new Error("busy");
+}
+async function runJudge0(code,input){
+  const t0=performance.now();
+  const r=await fj(J0+"/submissions?base64_encoded=false&wait=true",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source_code:code,language_id:54,stdin:input})},3);
+  let d=await r.json();
+  if(!r.ok&&!d.token)throw new Error("judge0 "+r.status);
+  let n=0;
+  while((!d.status||d.status.id<=2)&&d.token&&n++<20){
+    await sleep(1000);
+    const g=await fj(J0+"/submissions/"+d.token+"?base64_encoded=false",{},2);d=await g.json();
+  }
+  const id=d.status?d.status.id:0,tm=Math.round((parseFloat(d.time)||0)*1000),ms=Math.max(1,tm||Math.round(performance.now()-t0));
+  if(id===6)return{v:"CE",msg:d.compile_output||"Lỗi biên dịch",ms};
+  if(id===5)return{v:"TLE",ms};
+  if(id>=7&&id<=12)return{v:"RTE",msg:String(d.stderr||d.message||d.status.description||""),ms};
+  if(id===3||id===4)return{out:d.stdout||"",ms};
+  throw new Error("judge0 status "+id);
+}
+async function runWandbox(code,input){
+  const t0=performance.now();
+  const r=await fj("https://wandbox.org/api/compile.json",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,compiler:"gcc-head",stdin:input,"compiler-option-raw":"-std=c++17\n-O2"})},2);
+  if(!r.ok)throw new Error("wandbox "+r.status);
+  const d=await r.json(),ms=Math.max(1,Math.round(performance.now()-t0));
+  if(d.program_output==null&&d.compiler_error)return{v:"CE",msg:d.compiler_error,ms};
+  if(d.signal)return{v:/kill|time/i.test(d.signal)?"TLE":"RTE",msg:d.signal+"\n"+(d.program_error||""),ms};
+  if(d.status&&String(d.status)!=="0")return{v:"RTE",msg:d.program_error||("Exit code "+d.status),ms};
+  return{out:d.program_output||"",ms};
+}
+async function runCpp(code,input){
+  try{return await runJudge0(code,input)}
+  catch(e1){
+    try{return await runWandbox(code,input)}
+    catch(e2){throw new Error("SERVICE")}
+  }
+}
+const norm=s=>s.split("\n").map(x=>x.trimEnd()).join("\n").trim();
+async function judge(p,code){
+  const b=$("#go"),res=$("#res");
+  if(!code.trim()){res.innerHTML='<p class="err">Bạn chưa nhập mã nguồn.</p>';return}
+  if(code.length>50000){res.innerHTML='<p class="err">Mã nguồn quá dài (tối đa 50000 ký tự).</p>';return}
+  b.disabled=true;const r=[];let v="AC",msg="",maxms=0;
+  for(let i=0;i<p.T.length;i++){
+    res.innerHTML=`<p class="mu">Đang biên dịch và chấm test ${i+1}/${p.T.length}…</p>`;
+    let x;
+    try{x=await runCpp(code,p.T[i][0]+"\n")}
+    catch(e){res.innerHTML='<p class="err">Không kết nối được máy chủ chấm bài. Hãy thử lại sau ít phút (lần nộp này chưa được tính).</p>';b.disabled=false;return}
+    maxms=Math.max(maxms,x.ms);
+    if(x.v==="CE"){v="CE";msg=x.msg;for(let k=0;k<p.T.length;k++)r.push("CE");break}
+    if(x.v){r.push(x.v);if(v==="AC"||v==="WA"){v=x.v;msg=x.msg||""}}
+    else if(norm(x.out)===norm(p.T[i][1]))r.push("AC");
+    else{r.push("WA");if(v==="AC")v="WA"}
+    await sleep(250);
+  }
+  const ok=r.filter(x=>x==="AC").length;
+  SUBS.unshift({u:ME,p:p.id,v,ok,n:p.T.length,ms:maxms,at:new Date().toLocaleString("vi-VN")});SUBS=SUBS.slice(0,300);sv("qb_subs",SUBS);
+  const nm={AC:"Accepted",WA:"Sai kết quả",RTE:"Lỗi khi chạy",TLE:"Quá thời gian",CE:"Lỗi biên dịch"};
+  res.innerHTML=`<h2 class="${v}" style="margin-top:14px">${nm[v]}</h2><p class="mu" style="margin:0">${ok}/${p.T.length} test đạt · ${maxms} ms</p>${msg?`<div class="io" style="margin-top:8px">${esc(msg.slice(0,800))}</div>`:""}<div class="tc">${r.map((x,k)=>`<span class="${x}">Test ${k+1}: ${x}</span>`).join("")}</div>`;
+  b.disabled=false;
+}
+function ranking(){
+  const L=Object.keys(U).map(u=>[u,solved(u).size,pts(u)]).sort((a,b)=>b[2]-a[2]||b[1]-a[1]);
+  app.innerHTML=`<h1>Thành viên</h1><p class="mu">Xếp theo tổng điểm. Chỉ gồm tài khoản đã đăng ký trên trình duyệt này.</p><div class="tw"><table><thead><tr><th>Hạng</th><th>Tên đăng nhập</th><th>Bài đã giải</th><th>Điểm</th></tr></thead><tbody>${L.length?L.map((x,i)=>`<tr class="${x[0]===ME?"me":""}"><td>${i+1}</td><td>${esc(x[0])}</td><td>${x[1]}</td><td>${x[2]}</td></tr>`).join(""):'<tr><td colspan="4" class="mu">Chưa có thành viên nào.</td></tr>'}</tbody></table></div>`;
+}
+function submissions(){
+  if(!ME){location.hash="#login";return}
+  const L=SUBS.filter(s=>s.u===ME);
+  app.innerHTML=`<h1>Bài nộp của ${esc(ME)}</h1>`+(L.length?`<div class="tw"><table><thead><tr><th>Thời gian</th><th>Bài</th><th>Kết quả</th><th>Test</th><th>Thời gian chạy</th></tr></thead><tbody>${L.map(s=>`<tr><td class="mu">${s.at}</td><td><a href="#problem-${s.p}">${P.find(x=>x.id===s.p).t}</a></td><td class="${s.v}">${s.v}</td><td>${s.ok}/${s.n}</td><td>${s.ms} ms</td></tr>`).join("")}</tbody></table></div>`:`<p class="mu">Bạn chưa nộp bài nào.</p><a class="btn" href="#problems">Chọn bài để giải</a>`);
+}
+function formPage(reg){
+  app.innerHTML=`<div class="card form"><h1 style="font-size:22px">${reg?"Đăng ký tài khoản":"Đăng nhập"}</h1>
+  <label for="un">Tên đăng nhập</label><input id="un" autocomplete="username" maxlength="20">
+  <label for="pw">Mật khẩu</label><input id="pw" type="password" autocomplete="${reg?"new-password":"current-password"}">
+  ${reg?'<label for="pw2">Nhập lại mật khẩu</label><input id="pw2" type="password" autocomplete="new-password">':""}
+  <div class="err" id="er" role="alert"></div><button class="btn" id="ok" style="width:100%">${reg?"Tạo tài khoản":"Đăng nhập"}</button>
+  <p class="mu" style="margin:12px 0 0">${reg?'Đã có tài khoản? <a href="#login">Đăng nhập</a>':'Chưa có tài khoản? <a href="#register">Đăng ký</a>'}</p></div>`;
+  const E=m=>{$("#er").textContent=m};
+  $("#ok").onclick=async()=>{
+    const u=$("#un").value.trim(),p=$("#pw").value;E("");
+    if(!/^[A-Za-z0-9_]{3,20}$/.test(u))return E("Tên đăng nhập gồm 3–20 ký tự: chữ cái không dấu, số, dấu gạch dưới.");
+    if(!window.crypto||!crypto.subtle)return E("Trình duyệt không hỗ trợ mã hóa mật khẩu.");
+    if(reg){
+      if(p.length<6)return E("Mật khẩu cần ít nhất 6 ký tự.");
+      if(p!==$("#pw2").value)return E("Hai mật khẩu không khớp.");
+      if(U[u])return E("Tên đăng nhập đã tồn tại.");
+      const salt=hex(crypto.getRandomValues(new Uint8Array(12)));U[u]={salt,h:await hash(p,salt)};sv("qb_users",U);
+    }else{
+      if(!U[u]||U[u].h!==await hash(p,U[u].salt))return E("Sai tên đăng nhập hoặc mật khẩu.");
+    }
+    ME=u;sv("qb_me",u);location.hash="#problems";
+  };
+  $("#pw").onkeydown=e=>{if(e.key==="Enter")$("#ok").click()};
+}
+function newproblem(){
+  if(!ME){location.hash="#login";return}
+  app.innerHTML=`<h1>Đăng bài mới</h1><div class="card" style="max-width:720px">
+  <label for="n1">Mã bài (chữ thường/số, vd: tong3so)</label><input id="n1" maxlength=20>
+  <label for="n2">Tên bài</label><input id="n2" maxlength=80>
+  <label for="n3">Dạng bài (cách nhau bởi dấu phẩy)</label><input id="n3" placeholder="Xâu, Mảng">
+  <label for="n4">Điểm</label><input id="n4" type="number" value="10" min="1" max="100">
+  <label for="n5">Đề bài</label><textarea id="n5" rows="4"></textarea>
+  <label for="n6">Dữ liệu vào</label><textarea id="n6" rows="2"></textarea>
+  <label for="n7">Kết quả ra</label><textarea id="n7" rows="2"></textarea>
+  <label for="n8">Các bộ test (test đầu tiên làm ví dụ)</label>
+  <textarea id="n8" rows="9" class="code" style="min-height:0" placeholder="3 5\n===\n8\n---\n-4 10\n===\n6"></textarea>
+  <p class="mu" style="margin:4px 0 0">Mỗi test gồm <b>input</b>, dòng <b>===</b>, rồi <b>output đúng</b>. Các test cách nhau bằng dòng <b>---</b>. Mỗi test được biên dịch và chạy trên máy chủ chấm, nên dùng ít test (3–6 test) cho nhanh.</p>
+  <div class="err" id="er" role="alert"></div><button class="btn" id="ok">Đăng bài</button></div>`;
+  const E=m=>{$("#er").textContent=m},V=i=>$("#n"+i).value.trim();
+  $("#ok").onclick=()=>{
+    const id=V(1),t=V(2);
+    if(!/^[a-z0-9]{2,20}$/.test(id))return E("Mã bài gồm 2–20 ký tự: chữ thường không dấu và số.");
+    if(P.some(p=>p.id===id))return E("Mã bài đã tồn tại.");
+    if(!t||!V(5)||!V(6)||!V(7))return E("Hãy điền tên bài, đề bài, dữ liệu vào và kết quả ra.");
+    const T=V(8).split(/\n-{3,}\n/).map(b=>b.split(/\n={3,}\n/).map(x=>x.trim()));
+    if(!V(8)||T.some(x=>x.length!==2||!x[1]))return E("Test chưa đúng định dạng (input, dòng ===, output; các test cách nhau bởi ---).");
+    const h=s=>esc(s).replace(/\n/g,"<br>");
+    const p={id,t:esc(t),pt:Math.min(100,Math.max(1,+V(4)||10)),tg:V(3)?V(3).split(",").map(x=>esc(x.trim())).filter(Boolean):["Khác"],s:h(V(5)),inp:h(V(6)),out:h(V(7)),ex:T[0],T,u:ME};
+    CP.push(p);sv("qb_cp",CP);P.push(p);location.hash="#problem-"+id;
+  };
+}
+const login=()=>formPage(false),register=()=>formPage(true);
+$("#theme").onclick=()=>{const d=document.documentElement,dark=getComputedStyle(d).colorScheme==="dark";d.dataset.theme=dark?"light":"dark"};
+addEventListener("hashchange",route);route();
+</script>
+</body>
+</html>
