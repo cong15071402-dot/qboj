@@ -50,14 +50,18 @@ async function post(url,body,tries=3){
   throw new Error("busy");
 }
 async function runJudge0(code,input){
-  const t0=Date.now(),J=JUDGE0;
-  const r=await post(J+"/submissions?base64_encoded=false&wait=true",{source_code:code,language_id:54,stdin:input});
-  let d=await r.json();
-  if(!r.ok&&!d.token)throw new Error("judge0 "+r.status);
-  for(let n=0;(!d.status||d.status.id<=2)&&d.token&&n<20;n++){
-    await sleep(1000);d=await(await fetch(J+"/submissions/"+d.token+"?base64_encoded=false")).json();
+  const t0=Date.now();
+  const r=await post(JUDGE0+"/submissions?base64_encoded=false",{source_code:code,language_id:54,stdin:input});
+  const c=await r.json().catch(()=>({}));
+  if(!r.ok||!c.token)throw new Error("judge0 tạo bài "+r.status+" "+JSON.stringify(c).slice(0,150));
+  for(let n=0;n<30;n++){
+    await sleep(1000);
+    const g=await fetch(JUDGE0+"/submissions/"+c.token+"?base64_encoded=false",{signal:AbortSignal.timeout(20000)});
+    if(!g.ok){if(g.status===429)await sleep(1500);continue}
+    const d=await g.json();
+    if(d.status&&d.status.id>2)return verdict(d,t0);
   }
-  return verdict(d,t0);
+  throw new Error("judge0 quá thời gian chờ");
 }
 function verdict(d,t0){
   const id=d.status?d.status.id:0,ms=Math.max(1,Math.round((parseFloat(d.time)||0)*1000)||Date.now()-t0);
@@ -74,10 +78,10 @@ async function runBatch(code,inputs){
   const toks=await r.json();
   if(!r.ok||!Array.isArray(toks)||toks.some(t=>!t.token))throw new Error("batch "+r.status);
   const tk=toks.map(t=>t.token);
-  for(let n=0;n<40;n++){
+  for(let n=0;n<30;n++){
     await sleep(1500);
     const g=await fetch(JUDGE0+"/submissions/batch?base64_encoded=false&fields=token,stdout,stderr,compile_output,status,time,message&tokens="+tk.join(","));
-    if(!g.ok)continue;
+    if(!g.ok){console.error("batch hỏi kết quả",g.status,(await g.text()).slice(0,150));continue}
     const d=await g.json(),by={};
     if(!d.submissions||!d.submissions.every(x=>x.status&&x.status.id>2))continue;
     d.submissions.forEach(x=>by[x.token]=x);
@@ -88,7 +92,7 @@ async function runBatch(code,inputs){
 async function runWandbox(code,input){
   const t0=Date.now();
   const r=await post("https://wandbox.org/api/compile.json",{code,compiler:"gcc-head",stdin:input,"compiler-option-raw":"-std=c++17\n-O2"},2);
-  if(!r.ok)throw new Error("wandbox "+r.status);
+  if(!r.ok)throw new Error("wandbox "+r.status+" "+(await r.text()).slice(0,150));
   const d=await r.json(),ms=Math.max(1,Date.now()-t0);
   if(d.program_output==null&&d.compiler_error)return{v:"CE",msg:d.compiler_error,ms};
   if(d.signal)return{v:/kill|time/i.test(d.signal)?"TLE":"RTE",msg:d.signal+"\n"+(d.program_error||""),ms};
@@ -144,6 +148,16 @@ const srv=http.createServer(async(req,res)=>{
     if(req.method==="POST"){let s="";for await(const c of req){s+=c;if(s.length>200000)return send(413,{error:"Dữ liệu quá lớn."})}b=JSON.parse(s||"{}")}
     const me=who(req);
 
+    if(url==="/api/diag"){
+      if(Date.now()-(last.__diag||0)<15000)return send(429,{error:"Đợi 15 giây rồi thử lại."});
+      last.__diag=Date.now();
+      const out={judge0:JUDGE0},hello="#include <iostream>\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b;}";
+      const t=async(k,fn)=>{try{out[k]=await fn()}catch(e){out[k]="LỖI: "+e.message}};
+      await t("judge0_don",()=>runJudge0(hello,"2 3\n"));
+      await t("judge0_gop",()=>runBatch(hello,["2 3\n","4 5\n"]));
+      await t("wandbox",()=>runWandbox(hello,"2 3\n"));
+      return send(200,out);
+    }
     if(url==="/api/data")return send(200,{me,problems:all().map(pub),subs:S.subs.slice(0,3000),users:Object.keys(S.users)});
 
     if(url==="/api/register"||url==="/api/login"){
