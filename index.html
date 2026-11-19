@@ -45,7 +45,7 @@ label{display:block;margin:10px 0 4px;font-weight:600;font-size:14px}
 <body>
 <header><div class="bar">
 <a class="logo" href="#problems">MiniOJ</a>
-<nav id="nav"><a href="#problems" data-r="problems">Bài tập</a><a href="#submissions" data-r="submissions">Bài nộp</a><a href="#ranking" data-r="ranking">Thành viên</a><a href="#newproblem" data-r="newproblem">Đăng bài</a></nav>
+<nav id="nav"><a href="#problems" data-r="problems">Bài tập</a><a href="#submissions" data-r="submissions">Bài nộp</a><a href="#ranking" data-r="ranking">Thành viên</a><a href="#newproblem" data-r="newproblem" id="nav-new" hidden>Đăng bài</a></nav>
 <div class="r" id="auth"></div><button id="theme" aria-label="Đổi giao diện sáng/tối" style="color:#cfe0f1;background:none;border:0;cursor:pointer;padding:8px">◐</button>
 </div></header>
 <main id="app"></main>
@@ -56,7 +56,7 @@ const $=s=>document.querySelector(s),app=$("#app");
 const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
 const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
-let SUBS=[],USERS=[],ME=ld("qb_me",null),TOKEN=ld("qb_tok",null),CODE=ld("qb_code",{});
+let ADMIN=false,CANLOCK=false,SUBS=[],USERS=[],ME=ld("qb_me",null),TOKEN=ld("qb_tok",null),CODE=ld("qb_code",{});
 async function api(path,body){
   try{
     const r=await fetch("/api"+path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json",...(TOKEN?{Authorization:"Bearer "+TOKEN}:{})},body:body?JSON.stringify(body):undefined});
@@ -67,7 +67,7 @@ async function api(path,body){
 async function load(){
   const {ok,d}=await api("/data");
   if(!ok)return false;
-  P.length=0;P.push(...d.problems);SUBS=d.subs;USERS=d.users;ME=d.me;if(!ME)TOKEN=null;sv("qb_me",ME);sv("qb_tok",TOKEN);
+  P.length=0;P.push(...d.problems);SUBS=d.subs;USERS=d.users;ME=d.me;ADMIN=!!d.admin;CANLOCK=!!d.canLock;if(!ME)TOKEN=null;sv("qb_me",ME);sv("qb_tok",TOKEN);
   return true;
 }
 const solved=u=>new Set(SUBS.filter(s=>s.u===u&&s.v==="AC").map(s=>s.p));
@@ -75,7 +75,9 @@ const pts=u=>[...solved(u)].reduce((a,id)=>a+((P.find(p=>p.id===id)||{pt:0}).pt)
 const pcs=id=>{const a=SUBS.filter(s=>s.p===id);return a.length?Math.round(100*a.filter(s=>s.v==="AC").length/a.length):0};
 
 function authBar(){
-  $("#auth").innerHTML=ME?`<a href="#submissions">${esc(ME)}</a><button id="lo">Đăng xuất</button>`:`<a href="#login">Đăng nhập</a><a href="#register">Đăng ký</a>`;
+  $("#nav-new").hidden=!ADMIN;
+  $("#auth").innerHTML=ME?`${ADMIN?'<span class="tag">Admin</span>':""}<a href="#submissions">${esc(ME)}</a>${CANLOCK?'<button id="lk">Thoát admin</button>':""}<button id="lo">Đăng xuất</button>`:`<a href="#login">Đăng nhập</a><a href="#register">Đăng ký</a>`;
+  if(CANLOCK)$("#lk").onclick=async()=>{await api("/admin/lock",{});await load();route()};
   if(ME)$("#lo").onclick=()=>{ME=null;TOKEN=null;sv("qb_me",null);sv("qb_tok",null);authBar();location.hash="#login"};
 }
 function route(){
@@ -84,12 +86,26 @@ function route(){
   authBar();({problems,problem,ranking,submissions,login,register,newproblem}[r]||problems)(h.slice(r.length+1));window.scrollTo(0,0);
 }
 function problems(){
-  app.innerHTML=`<h1>Bài tập</h1><div class="tools"><input id="q" placeholder="Tìm theo tên hoặc dạng bài…" aria-label="Tìm bài tập"></div>
-  <div class="tw"><table><thead><tr><th>Mã bài</th><th>Tên bài</th><th>Dạng bài</th><th>Điểm</th><th>% AC</th><th>Trạng thái</th></tr></thead><tbody id="tb"></tbody></table></div>`;
+  app.innerHTML=`<h1>Bài tập</h1><div class="tools"><input id="q" placeholder="Tìm theo tên hoặc dạng bài…" aria-label="Tìm bài tập" autocomplete="off"></div>
+  <div class="tw"><table><thead><tr><th>Mã bài</th><th>Tên bài</th><th>Dạng bài</th><th>Điểm</th><th>% AC</th><th>Trạng thái</th>${ADMIN?"<th></th>":""}</tr></thead><tbody id="tb"></tbody></table></div>`;
   const draw=()=>{const q=$("#q").value.toLowerCase(),S=ME?solved(ME):new Set();
     const L=P.filter(p=>(p.t+p.id+p.tg.join(" ")).toLowerCase().includes(q));
-    $("#tb").innerHTML=L.length?L.map(p=>`<tr><td class="mu">${p.id}</td><td><a href="#problem-${p.id}"><b>${p.t}</b></a></td><td>${p.tg.map(t=>`<span class="tag">${t}</span>`).join("")}</td><td>${p.pt}</td><td>${pcs(p.id)}%</td><td>${S.has(p.id)?'<span class="AC">✔ Đã giải</span>':ME&&SUBS.some(s=>s.u===ME&&s.p===p.id)?'<span class="mu">Đã thử</span>':'<span class="mu">–</span>'}</td></tr>`).join(""):`<tr><td colspan="6" class="mu">Không có bài phù hợp.</td></tr>`};
+    $("#tb").innerHTML=L.length?L.map(p=>`<tr><td class="mu">${p.id}</td><td><a href="#problem-${p.id}"><b>${p.t}</b></a></td><td>${p.tg.map(t=>`<span class="tag">${t}</span>`).join("")}</td><td>${p.pt}</td><td>${pcs(p.id)}%</td><td>${S.has(p.id)?'<span class="AC">✔ Đã giải</span>':ME&&SUBS.some(s=>s.u===ME&&s.p===p.id)?'<span class="mu">Đã thử</span>':'<span class="mu">–</span>'}</td>${ADMIN?`<td><button class="btn g" data-del="${p.id}">Xóa</button></td>`:""}</tr>`).join(""):`<tr><td colspan="${ADMIN?7:6}" class="mu">Không có bài phù hợp.</td></tr>`};
   $("#q").oninput=draw;draw();
+  $("#tb").onclick=e=>{const id=e.target.dataset&&e.target.dataset.del;if(id)delProblem(id)};
+  $("#q").onkeydown=async e=>{
+    if(e.key!=="Enter")return;
+    const v=$("#q").value.trim();
+    if(!ME||v.length<6||ADMIN)return;
+    const {ok,d}=await api("/admin/unlock",{code:v});
+    if(ok&&d.admin){$("#q").value="";ADMIN=true;CANLOCK=true;await load();route();alert("Đã bật quyền quản trị.")}
+  };
+}
+async function delProblem(id){
+  if(!confirm("Xóa bài "+id+" cùng các bài nộp của nó? Không thể hoàn tác."))return;
+  const r=await api("/problem/delete",{id});
+  if(!r.ok){alert(r.d.error||"Không xóa được.");return}
+  await load();if(location.hash==="#problems")route();else location.hash="#problems";
 }
 function problem(id){
   const p=P.find(x=>x.id===id);if(!p){app.innerHTML='<h1>Không tìm thấy bài</h1><a href="#problems">Về danh sách bài</a>';return}
@@ -103,6 +119,7 @@ function problem(id){
   c.oninput=()=>{CODE[p.id]=c.value;sv("qb_code",CODE)};
   c.onkeydown=e=>{if(e.key==="Tab"){e.preventDefault();c.setRangeText("    ",c.selectionStart,c.selectionEnd,"end")}};
   $("#rs").onclick=()=>{c.value=TPL;c.oninput()};
+  if(ADMIN){const x=document.createElement("button");x.className="btn g";x.textContent="Xóa bài này";x.style.marginLeft="8px";$("#rs").after(x);x.onclick=()=>delProblem(p.id)}
   $("#go").onclick=()=>{if(!ME){location.hash="#login";return}judge(p,c.value)};
 }
 async function judge(p,code){
@@ -138,7 +155,7 @@ function formPage(reg){
     const u=$("#un").value.trim(),p=$("#pw").value;E("");
     if(!/^[A-Za-z0-9_]{3,20}$/.test(u))return E("Tên đăng nhập gồm 3–20 ký tự: chữ cái không dấu, số, dấu gạch dưới.");
     if(reg){
-      if(p.length<6)return E("Mật khẩu cần ít nhất 6 ký tự.");
+      if(p.length<8)return E("Mật khẩu cần ít nhất 8 ký tự.");
       if(p!==$("#pw2").value)return E("Hai mật khẩu không khớp.");
     }
     const {ok,d}=await api(reg?"/register":"/login",{u,p});
@@ -149,6 +166,7 @@ function formPage(reg){
 }
 function newproblem(){
   if(!ME){location.hash="#login";return}
+  if(!ADMIN){app.innerHTML='<h1>Đăng bài</h1><div class="card"><p class="err">Chỉ quản trị viên mới được đăng bài.</p></div>';return}
   app.innerHTML=`<h1>Đăng bài mới</h1><div class="card" style="max-width:720px">
   <label for="n1">Mã bài (chữ thường/số, vd: tong3so)</label><input id="n1" maxlength=20>
   <label for="n2">Tên bài</label><input id="n2" maxlength=80>

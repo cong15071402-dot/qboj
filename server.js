@@ -1,7 +1,7 @@
 const http=require("http"),fs=require("fs"),path=require("path"),crypto=require("crypto");
 const PORT=process.env.PORT||3000,DB=process.env.DATABASE_URL,FILE=path.join(__dirname,"data.json");
 const BUILTIN=JSON.parse(fs.readFileSync(path.join(__dirname,"problems.json"),"utf8"));
-let S={users:{},subs:[],cp:[],secret:crypto.randomBytes(24).toString("hex")},pool=null;
+let S={users:{},subs:[],cp:[],hidden:[],admins:{},secret:crypto.randomBytes(24).toString("hex")},pool=null;
 
 /* ---------- lưu trữ: Postgres nếu có DATABASE_URL, nếu không thì file data.json ---------- */
 async function init(){
@@ -25,7 +25,7 @@ function save(){
 
 /* ---------- đăng nhập ---------- */
 const sign=s=>crypto.createHmac("sha256",S.secret).update(s).digest("hex");
-const mk=u=>{const t=u+"."+(Date.now()+30*864e5);return Buffer.from(t).toString("base64url")+"."+sign(t)};
+const mk=u=>{const t=u+"."+(Date.now()+14*864e5);return Buffer.from(t).toString("base64url")+"."+sign(t)};
 function who(req){
   const [b,g]=(req.headers.authorization||"").slice(7).split(".");
   if(!b||!g)return null;
@@ -34,7 +34,28 @@ function who(req){
   const u=t.slice(0,i);
   return +t.slice(i+1)>Date.now()&&Object.hasOwn(S.users,u)?u:null;
 }
+const ADMINS=new Set((process.env.ADMIN_USERS||"").split(",").map(x=>x.trim()).filter(Boolean));
+const CODE=process.env.ADMIN_CODE||"";
+const sha=x=>crypto.createHash("sha256").update(String(x)).digest();
+const ctag=()=>sha(CODE+"|"+S.secret).toString("hex").slice(0,16);
+const viaCode=u=>!!(CODE&&u&&Object.hasOwn(S.admins,u)&&S.admins[u]===ctag());
+const isAdmin=u=>!!u&&(ADMINS.has(u)||viaCode(u));
+const HDR={
+  "X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Referrer-Policy":"no-referrer",
+  "Strict-Transport-Security":"max-age=15552000","Permissions-Policy":"camera=(), microphone=(), geolocation=()",
+  "Content-Security-Policy":"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+};
+const hits=new Map();
+const cnt=(k,ms)=>{const n=Date.now(),a=(hits.get(k)||[]).filter(t=>n-t<ms);hits.set(k,a);return a.length};
+const add=k=>{const a=hits.get(k)||[];a.push(Date.now());hits.set(k,a)};
+setInterval(()=>{const n=Date.now();for(const [k,a] of hits)if(!a.length||n-a[a.length-1]>36e5)hits.delete(k)},6e5).unref();
+const ipOf=req=>String(req.headers["true-client-ip"]||(req.headers["x-forwarded-for"]||"").split(",")[0]||req.socket.remoteAddress||"?").trim();
 const hp=(p,salt)=>crypto.scryptSync(p,salt,32).toString("hex");
+const DUMMY=hp("dummy","0000");
+function pwOk(p,x){
+  const a=Buffer.from(hp(p,x?x.salt:"0000")),b=Buffer.from(x?x.h:DUMMY);
+  return crypto.timingSafeEqual(a,b)&&!!x;
+}
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const h=s=>esc(s).replace(/\n/g,"<br>");
 
@@ -132,55 +153,72 @@ async function judge(p,code){
 }
 
 /* ---------- API ---------- */
-const all=()=>BUILTIN.concat(S.cp);
-const pub=p=>({id:p.id,t:p.t,pt:p.pt,tg:p.tg,s:p.s,inp:p.inp,out:p.out,ex:p.ex});
-const last={};
+const all=()=>BUILTIN.filter(p=>!S.hidden.includes(p.id)).concat(S.cp);
+const pub=p=>({id:p.id,t:p.t,pt:p.pt,tg:p.tg,s:p.s,inp:p.inp,out:p.out,ex:p.ex,c:!!p.u});
+const last={};let active=0;
 const srv=http.createServer(async(req,res)=>{
-  const send=(c,o)=>{res.writeHead(c,{"Content-Type":"application/json; charset=utf-8"});res.end(JSON.stringify(o))};
+  const send=(c,o)=>{res.writeHead(c,{...HDR,"Cache-Control":"no-store","Content-Type":"application/json; charset=utf-8"});res.end(JSON.stringify(o))};
+  const ip=ipOf(req);
   try{
     const url=req.url.split("?")[0];
     if(req.method==="GET"&&(url==="/"||url==="/index.html")){
-      res.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});return res.end(fs.readFileSync(path.join(__dirname,"index.html")));
+      res.writeHead(200,{...HDR,"Content-Type":"text/html; charset=utf-8"});return res.end(fs.readFileSync(path.join(__dirname,"index.html")));
     }
     if(url==="/healthz")return send(200,{ok:1});
     if(!url.startsWith("/api/"))return send(404,{error:"Not found"});
     let b={};
     if(req.method==="POST"){let s="";for await(const c of req){s+=c;if(s.length>200000)return send(413,{error:"Dữ liệu quá lớn."})}b=JSON.parse(s||"{}")}
+    if(cnt("G:"+ip,6e4)>=240)return send(429,{error:"Bạn gửi yêu cầu quá nhanh, hãy chậm lại."});
+    add("G:"+ip);
     const me=who(req);
 
-    if(url==="/api/diag"){
-      if(Date.now()-(last.__diag||0)<15000)return send(429,{error:"Đợi 15 giây rồi thử lại."});
-      last.__diag=Date.now();
-      const out={judge0:JUDGE0},hello="#include <iostream>\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b;}";
-      const t=async(k,fn)=>{try{out[k]=await fn()}catch(e){out[k]="LỖI: "+e.message}};
-      await t("judge0_don",()=>runJudge0(hello,"2 3\n"));
-      await t("judge0_gop",()=>runBatch(hello,["2 3\n","4 5\n"]));
-      await t("wandbox",()=>runWandbox(hello,"2 3\n"));
-      return send(200,out);
-    }
-    if(url==="/api/data")return send(200,{me,problems:all().map(pub),subs:S.subs.slice(0,3000),users:Object.keys(S.users)});
+    if(url==="/api/data")return send(200,{me,problems:all().map(pub),subs:S.subs.slice(0,3000),users:Object.keys(S.users),admin:isAdmin(me),canLock:viaCode(me)&&!ADMINS.has(me)});
 
     if(url==="/api/register"||url==="/api/login"){
       const u=String(b.u||""),p=String(b.p||"");
       if(!/^[A-Za-z0-9_]{3,20}$/.test(u)||u.startsWith("__"))return send(400,{error:"Tên đăng nhập không hợp lệ."});
       if(url==="/api/register"){
-        if(p.length<6||p.length>100)return send(400,{error:"Mật khẩu cần 6–100 ký tự."});
+        if(cnt("R:"+ip,36e5)>=5)return send(429,{error:"Bạn đã tạo quá nhiều tài khoản, hãy thử lại sau 1 giờ."});
+        if(p.length<8||p.length>100)return send(400,{error:"Mật khẩu cần 8–100 ký tự."});
+        if(Object.keys(S.users).length>=2000)return send(503,{error:"Hệ thống đã đủ số tài khoản cho phép."});
         if(Object.hasOwn(S.users,u))return send(409,{error:"Tên đăng nhập đã tồn tại."});
-        const salt=crypto.randomBytes(12).toString("hex");S.users[u]={salt,h:hp(p,salt)};await save();
+        const salt=crypto.randomBytes(12).toString("hex");S.users[u]={salt,h:hp(p,salt)};add("R:"+ip);await save();
         return send(200,{u,token:mk(u)});
       }
+      if(cnt("L:"+ip+":"+u,6e5)>=8||cnt("LI:"+ip,6e5)>=30)return send(429,{error:"Đăng nhập sai quá nhiều lần, hãy thử lại sau 10 phút."});
       const x=Object.hasOwn(S.users,u)?S.users[u]:null;
-      if(!x||hp(p,x.salt)!==x.h)return send(401,{error:"Sai tên đăng nhập hoặc mật khẩu."});
+      if(!pwOk(p,x)){add("L:"+ip+":"+u);add("LI:"+ip);return send(401,{error:"Sai tên đăng nhập hoặc mật khẩu."})}
       return send(200,{u,token:mk(u)});
     }
 
     if(!me)return send(401,{error:"Bạn cần đăng nhập."});
 
+    if(url==="/api/admin/unlock"){
+      const k="A:"+ip+":"+me;
+      if(cnt(k,9e5)>=5||cnt("AI:"+ip,9e5)>=15)return send(429,{admin:isAdmin(me)});
+      if(CODE&&b.code&&crypto.timingSafeEqual(sha(b.code),sha(CODE))){
+        S.admins[me]=ctag();await save();return send(200,{admin:true});
+      }
+      add(k);add("AI:"+ip);return send(200,{admin:isAdmin(me)});
+    }
+    if(url==="/api/admin/lock"){
+      if(Object.hasOwn(S.admins,me)){delete S.admins[me];await save()}
+      return send(200,{admin:isAdmin(me)});
+    }
+    if(url==="/api/problem/delete"){
+      if(!isAdmin(me))return send(403,{error:"Chỉ quản trị viên mới được xóa bài."});
+      const id=String(b.id||""),i=S.cp.findIndex(p=>p.id===id);
+      if(i>=0)S.cp.splice(i,1);
+      else if(BUILTIN.some(p=>p.id===id)&&!S.hidden.includes(id))S.hidden.push(id);
+      else return send(404,{error:"Không tìm thấy bài."});
+      S.subs=S.subs.filter(x=>x.p!==id);await save();return send(200,{ok:1});
+    }
     if(url==="/api/problem"){
+      if(!isAdmin(me))return send(403,{error:"Chỉ quản trị viên mới được đăng bài."});
       const id=String(b.id||""),t=String(b.t||"").trim().slice(0,80);
       if(!/^[a-z0-9]{2,20}$/.test(id))return send(400,{error:"Mã bài gồm 2–20 ký tự: chữ thường không dấu và số."});
       if(all().some(p=>p.id===id))return send(409,{error:"Mã bài đã tồn tại."});
-      if(S.cp.filter(p=>p.u===me).length>=20)return send(400,{error:"Bạn đã đăng tối đa 20 bài."});
+      if(S.cp.length>=200)return send(400,{error:"Đã đạt tối đa 200 bài đăng thêm."});
       const f=k=>String(b[k]||"").trim().slice(0,k==="tests"?40000:5000);
       if(!t||!f("s")||!f("inp")||!f("out"))return send(400,{error:"Hãy điền tên bài, đề bài, dữ liệu vào và kết quả ra."});
       const T=f("tests").split(/\n-{3,}\n/).map(x=>x.split(/\n={3,}\n/).map(y=>y.trim()));
@@ -194,9 +232,10 @@ const srv=http.createServer(async(req,res)=>{
       if(!p)return send(404,{error:"Không tìm thấy bài."});
       if(!code.trim()||code.length>50000)return send(400,{error:"Mã nguồn trống hoặc quá dài (tối đa 50000 ký tự)."});
       if(Date.now()-(last[me]||0)<5000)return send(429,{error:"Bạn nộp quá nhanh, hãy đợi vài giây."});
-      last[me]=Date.now();
+      if(active>=3)return send(503,{error:"Hệ thống đang chấm nhiều bài, hãy thử lại sau vài giây."});
+      last[me]=Date.now();active++;
       let result;
-      try{result=await judge(p,code)}catch(e){console.error("judge:",e.message);return send(503,{error:"Máy chủ chấm bài đang bận hoặc lỗi. Thử lại sau ít phút (lần nộp này chưa được tính)."})}
+      try{result=await judge(p,code)}catch(e){console.error("judge:",e.message);return send(503,{error:"Máy chủ chấm bài đang bận hoặc lỗi. Thử lại sau ít phút (lần nộp này chưa được tính)."})}finally{active--}
       const sub={u:me,p:p.id,v:result.v,ok:result.okc,n:result.n,ms:result.ms,at:new Date().toISOString()};
       S.subs.unshift(sub);S.subs=S.subs.slice(0,5000);await save();
       return send(200,{result,sub});
@@ -204,5 +243,5 @@ const srv=http.createServer(async(req,res)=>{
     send(404,{error:"Not found"});
   }catch(e){console.error(e);send(400,{error:"Yêu cầu không hợp lệ."})}
 });
-init().then(()=>srv.listen(PORT,()=>console.log("QBOJ chạy ở cổng",PORT,DB?"(Postgres)":"(file data.json)")))
+init().then(()=>srv.listen(PORT,()=>console.log("MiniOJ chạy ở cổng",PORT,DB?"(Postgres)":"(file data.json)","| admin:",[...ADMINS].join(",")||"(không)","| mã admin:",CODE?"đã đặt":"CHƯA ĐẶT")))
   .catch(e=>{console.error("Không khởi động được:",e.message);process.exit(1)});
