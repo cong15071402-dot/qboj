@@ -1,7 +1,7 @@
-const http=require("http"),fs=require("fs"),path=require("path"),crypto=require("crypto");
+const http=require("http"),fs=require("fs"),path=require("path"),crypto=require("crypto"),zlib=require("zlib");
 const PORT=process.env.PORT||3000,DB=process.env.DATABASE_URL,FILE=path.join(__dirname,"data.json");
 const BUILTIN=JSON.parse(fs.readFileSync(path.join(__dirname,"problems.json"),"utf8"));
-let S={users:{},subs:[],cp:[],hidden:[],admins:{},secret:crypto.randomBytes(24).toString("hex")},pool=null;
+let S={users:{},subs:[],cp:[],hidden:[],admins:{},banned:{},secret:crypto.randomBytes(24).toString("hex")},pool=null;
 
 /* ---------- lưu trữ: Postgres nếu có DATABASE_URL, nếu không thì file data.json ---------- */
 async function init(){
@@ -34,6 +34,8 @@ function who(req){
   const u=t.slice(0,i);
   return +t.slice(i+1)>Date.now()&&Object.hasOwn(S.users,u)?u:null;
 }
+const isBanned=u=>!!u&&Object.hasOwn(S.banned,u);
+const REG_MAX=+process.env.REG_PER_HOUR||5,BURST=+process.env.RATE_BURST||100;
 const ADMINS=new Set((process.env.ADMIN_USERS||"").split(",").map(x=>x.trim()).filter(Boolean));
 const CODE=process.env.ADMIN_CODE||"";
 const sha=x=>crypto.createHash("sha256").update(String(x)).digest();
@@ -47,9 +49,10 @@ const HDR={
 };
 const hits=new Map();
 const cnt=(k,ms)=>{const n=Date.now(),a=(hits.get(k)||[]).filter(t=>n-t<ms);hits.set(k,a);return a.length};
-const add=k=>{const a=hits.get(k)||[];a.push(Date.now());hits.set(k,a)};
-setInterval(()=>{const n=Date.now();for(const [k,a] of hits)if(!a.length||n-a[a.length-1]>36e5)hits.delete(k)},6e5).unref();
-const ipOf=req=>String(req.headers["true-client-ip"]||(req.headers["x-forwarded-for"]||"").split(",")[0]||req.socket.remoteAddress||"?").trim();
+const add=k=>{if(hits.size>2e5)hits.clear();const a=hits.get(k)||[];a.push(Date.now());hits.set(k,a)};
+const blocked=new Map();
+setInterval(()=>{const n=Date.now();for(const [k,a] of hits)if(!a.length||n-a[a.length-1]>36e5)hits.delete(k);for(const [k,t] of blocked)if(t<n)blocked.delete(k)},6e4).unref();
+const ipOf=req=>{const h=req.headers;return String(h["cf-connecting-ip"]||h["true-client-ip"]||(h["x-forwarded-for"]||"").split(",")[0]||req.socket.remoteAddress||"?").trim()};
 const hp=(p,salt)=>crypto.scryptSync(p,salt,32).toString("hex");
 const DUMMY=hp("dummy","0000");
 function pwOk(p,x){
@@ -156,29 +159,55 @@ async function judge(p,code){
 const all=()=>BUILTIN.filter(p=>!S.hidden.includes(p.id)).concat(S.cp);
 const pub=p=>({id:p.id,t:p.t,pt:p.pt,tg:p.tg,s:p.s,inp:p.inp,out:p.out,ex:p.ex,c:!!p.u});
 const last={};let active=0;
-const srv=http.createServer(async(req,res)=>{
+const PAGE=fs.readFileSync(path.join(__dirname,"index.html")),PAGEGZ=zlib.gzipSync(PAGE);
+/* ---------- chống tải dồn (k6, ab, wrk, hey…) ---------- */
+const BAD_UA=/^(k6|hey|wrk|siege|vegeta|bombardier|autocannon|locust|loadtest)\b|k6\.io|apachebench|gatling|jmeter|artillery/i;
+function strike(ip,w){
+  for(let i=0;i<w;i++)add("V:"+ip);
+  if(cnt("V:"+ip,3e5)>=3&&!(blocked.get(ip)>Date.now())){blocked.set(ip,Date.now()+9e5);console.log("Chặn IP 15 phút:",ip)}
+}
+const tooMany=(res,ms)=>{res.writeHead(429,{...HDR,"Retry-After":String(Math.ceil(ms/1000)),Connection:"close"});res.end()};
+let ipLogs=0;
+const srv=http.createServer({maxHeaderSize:8192},async(req,res)=>{
   const send=(c,o)=>{res.writeHead(c,{...HDR,"Cache-Control":"no-store","Content-Type":"application/json; charset=utf-8"});res.end(JSON.stringify(o))};
-  const ip=ipOf(req);
+  const ip=ipOf(req),now=Date.now();
+  if(ipLogs++<2)console.log("IP mẫu:",ip,"| cf-connecting-ip:",!!req.headers["cf-connecting-ip"],"| true-client-ip:",!!req.headers["true-client-ip"],"| x-forwarded-for:",req.headers["x-forwarded-for"]||"-");
+  const bu=blocked.get(ip);
+  if(bu>now)return tooMany(res,bu-now);
   try{
-    const url=req.url.split("?")[0];
-    if(req.method==="GET"&&(url==="/"||url==="/index.html")){
-      res.writeHead(200,{...HDR,"Content-Type":"text/html; charset=utf-8"});return res.end(fs.readFileSync(path.join(__dirname,"index.html")));
+    const full=String(req.url||"/"),url=full.split("?")[0],isApi=url.startsWith("/api/"),ua=String(req.headers["user-agent"]||"");
+    if(full.length>2000){res.writeHead(414,{Connection:"close"});return res.end()}
+    if(!["GET","POST","HEAD"].includes(req.method)){res.writeHead(405,{Connection:"close"});return res.end()}
+    if(BAD_UA.test(ua)||(isApi&&!ua)){strike(ip,3);res.writeHead(403,{Connection:"close"});return res.end()}
+    if(url!=="/healthz"){
+      if(cnt("W:"+ip,1e4)>=BURST||(isApi&&cnt("G:"+ip,6e4)>=240)){strike(ip,1);return tooMany(res,1e4)}
+      add("W:"+ip);if(isApi)add("G:"+ip);
+    }
+    if((req.method==="GET"||req.method==="HEAD")&&(url==="/"||url==="/index.html")){
+      const gz=/\bgzip\b/.test(req.headers["accept-encoding"]||"");
+      res.writeHead(200,{...HDR,"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-cache",Vary:"Accept-Encoding",...(gz?{"Content-Encoding":"gzip"}:{})});
+      return res.end(req.method==="HEAD"?undefined:(gz?PAGEGZ:PAGE));
     }
     if(url==="/healthz")return send(200,{ok:1});
-    if(!url.startsWith("/api/"))return send(404,{error:"Not found"});
+    if(!isApi)return send(404,{error:"Not found"});
+    if(url==="/api/data"){if(cnt("D:"+ip,6e4)>=60)return send(429,{error:"Bạn tải dữ liệu quá nhanh, hãy chậm lại."});add("D:"+ip)}
+    if(url==="/api/submit"){if(cnt("S:"+ip,6e4)>=12)return send(429,{error:"Bạn nộp bài quá nhanh, hãy chậm lại."});add("S:"+ip)}
     let b={};
-    if(req.method==="POST"){let s="";for await(const c of req){s+=c;if(s.length>200000)return send(413,{error:"Dữ liệu quá lớn."})}b=JSON.parse(s||"{}")}
-    if(cnt("G:"+ip,6e4)>=240)return send(429,{error:"Bạn gửi yêu cầu quá nhanh, hãy chậm lại."});
-    add("G:"+ip);
-    const me=who(req);
+    if(req.method==="POST"){
+      const lim=(url==="/api/problem"||url==="/api/submit")?200000:4000;let s="";
+      for await(const c of req){s+=c;if(s.length>lim)return send(413,{error:"Dữ liệu quá lớn."})}
+      b=JSON.parse(s||"{}");
+    }
+    const raw=who(req),me=raw&&!isBanned(raw)?raw:null;
 
-    if(url==="/api/data")return send(200,{me,problems:all().map(pub),subs:S.subs.slice(0,3000),users:Object.keys(S.users),admin:isAdmin(me),canLock:viaCode(me)&&!ADMINS.has(me)});
+    if(url==="/api/data")return send(200,{me,problems:all().map(pub),subs:S.subs.slice(0,3000),users:Object.keys(S.users).filter(u=>isAdmin(me)||!isBanned(u)),admin:isAdmin(me),canLock:viaCode(me)&&!ADMINS.has(me),
+      banned:isAdmin(me)?Object.keys(S.banned):[],admins:isAdmin(me)?Object.keys(S.users).filter(isAdmin):[]});
 
     if(url==="/api/register"||url==="/api/login"){
       const u=String(b.u||""),p=String(b.p||"");
       if(!/^[A-Za-z0-9_]{3,20}$/.test(u)||u.startsWith("__"))return send(400,{error:"Tên đăng nhập không hợp lệ."});
       if(url==="/api/register"){
-        if(cnt("R:"+ip,36e5)>=5)return send(429,{error:"Bạn đã tạo quá nhiều tài khoản, hãy thử lại sau 1 giờ."});
+        if(cnt("R:"+ip,36e5)>=REG_MAX)return send(429,{error:"Mạng của bạn đã tạo quá nhiều tài khoản trong 1 giờ, hãy thử lại sau."});
         if(p.length<8||p.length>100)return send(400,{error:"Mật khẩu cần 8–100 ký tự."});
         if(Object.keys(S.users).length>=2000)return send(503,{error:"Hệ thống đã đủ số tài khoản cho phép."});
         if(Object.hasOwn(S.users,u))return send(409,{error:"Tên đăng nhập đã tồn tại."});
@@ -188,10 +217,11 @@ const srv=http.createServer(async(req,res)=>{
       if(cnt("L:"+ip+":"+u,6e5)>=8||cnt("LI:"+ip,6e5)>=30)return send(429,{error:"Đăng nhập sai quá nhiều lần, hãy thử lại sau 10 phút."});
       const x=Object.hasOwn(S.users,u)?S.users[u]:null;
       if(!pwOk(p,x)){add("L:"+ip+":"+u);add("LI:"+ip);return send(401,{error:"Sai tên đăng nhập hoặc mật khẩu."})}
+      if(isBanned(u))return send(403,{error:"Tài khoản này đã bị khóa bởi quản trị viên."});
       return send(200,{u,token:mk(u)});
     }
 
-    if(!me)return send(401,{error:"Bạn cần đăng nhập."});
+    if(!me)return raw?send(403,{error:"Tài khoản của bạn đã bị khóa bởi quản trị viên."}):send(401,{error:"Bạn cần đăng nhập."});
 
     if(url==="/api/admin/unlock"){
       const k="A:"+ip+":"+me;
@@ -204,6 +234,17 @@ const srv=http.createServer(async(req,res)=>{
     if(url==="/api/admin/lock"){
       if(Object.hasOwn(S.admins,me)){delete S.admins[me];await save()}
       return send(200,{admin:isAdmin(me)});
+    }
+    if(url==="/api/admin/ban"||url==="/api/admin/unban"){
+      if(!isAdmin(me))return send(403,{error:"Chỉ quản trị viên mới được thực hiện."});
+      const u=String(b.u||"");
+      if(!Object.hasOwn(S.users,u))return send(404,{error:"Không tìm thấy tài khoản."});
+      if(url==="/api/admin/ban"){
+        if(u===me)return send(400,{error:"Bạn không thể tự khóa tài khoản của mình."});
+        if(isAdmin(u))return send(400,{error:"Không thể khóa tài khoản quản trị viên."});
+        S.banned[u]={at:new Date().toISOString(),by:me};
+      }else delete S.banned[u];
+      await save();return send(200,{ok:1});
     }
     if(url==="/api/problem/delete"){
       if(!isAdmin(me))return send(403,{error:"Chỉ quản trị viên mới được xóa bài."});
@@ -243,5 +284,6 @@ const srv=http.createServer(async(req,res)=>{
     send(404,{error:"Not found"});
   }catch(e){console.error(e);send(400,{error:"Yêu cầu không hợp lệ."})}
 });
+srv.headersTimeout=15000;srv.requestTimeout=20000;srv.keepAliveTimeout=5000;srv.maxConnections=500;
 init().then(()=>srv.listen(PORT,()=>console.log("MiniOJ chạy ở cổng",PORT,DB?"(Postgres)":"(file data.json)","| admin:",[...ADMINS].join(",")||"(không)","| mã admin:",CODE?"đã đặt":"CHƯA ĐẶT")))
   .catch(e=>{console.error("Không khởi động được:",e.message);process.exit(1)});

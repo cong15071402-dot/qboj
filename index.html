@@ -56,7 +56,7 @@ const $=s=>document.querySelector(s),app=$("#app");
 const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
 const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
-let ADMIN=false,CANLOCK=false,SUBS=[],USERS=[],ME=ld("qb_me",null),TOKEN=ld("qb_tok",null),CODE=ld("qb_code",{});
+let ADMIN=false,CANLOCK=false,BANNED=[],ADMIN_LIST=[],SUBS=[],USERS=[],ME=ld("qb_me",null),TOKEN=ld("qb_tok",null),CODE=ld("qb_code",{});
 async function api(path,body){
   try{
     const r=await fetch("/api"+path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json",...(TOKEN?{Authorization:"Bearer "+TOKEN}:{})},body:body?JSON.stringify(body):undefined});
@@ -67,7 +67,7 @@ async function api(path,body){
 async function load(){
   const {ok,d}=await api("/data");
   if(!ok)return false;
-  P.length=0;P.push(...d.problems);SUBS=d.subs;USERS=d.users;ME=d.me;ADMIN=!!d.admin;CANLOCK=!!d.canLock;if(!ME)TOKEN=null;sv("qb_me",ME);sv("qb_tok",TOKEN);
+  P.length=0;P.push(...d.problems);SUBS=d.subs;USERS=d.users;ME=d.me;ADMIN=!!d.admin;CANLOCK=!!d.canLock;BANNED=d.banned||[];ADMIN_LIST=d.admins||[];if(!ME)TOKEN=null;sv("qb_me",ME);sv("qb_tok",TOKEN);
   return true;
 }
 const solved=u=>new Set(SUBS.filter(s=>s.u===u&&s.v==="AC").map(s=>s.p));
@@ -136,7 +136,20 @@ async function judge(p,code){
 }
 function ranking(){
   const L=USERS.map(u=>[u,solved(u).size,pts(u)]).sort((a,b)=>b[2]-a[2]||b[1]-a[1]);
-  app.innerHTML=`<h1>Thành viên</h1><p class="mu">Xếp theo tổng điểm.</p><div class="tw"><table><thead><tr><th>Hạng</th><th>Tên đăng nhập</th><th>Bài đã giải</th><th>Điểm</th></tr></thead><tbody>${L.length?L.map((x,i)=>`<tr class="${x[0]===ME?"me":""}"><td>${i+1}</td><td>${esc(x[0])}</td><td>${x[1]}</td><td>${x[2]}</td></tr>`).join(""):'<tr><td colspan="4" class="mu">Chưa có thành viên nào.</td></tr>'}</tbody></table></div>`;
+  const row=(x,i)=>{
+    const bn=BANNED.includes(x[0]),ad=ADMIN_LIST.includes(x[0]);
+    const act=ADMIN?`<td>${x[0]===ME||ad?"":`<button class="btn g" data-${bn?"unban":"ban"}="${esc(x[0])}">${bn?"Mở khóa":"Khóa"}</button>`}</td>`:"";
+    return `<tr class="${x[0]===ME?"me":""}"><td>${i+1}</td><td>${esc(x[0])}${ad?' <span class="tag">Admin</span>':""}${bn?' <span class="WA">đã khóa</span>':""}</td><td>${x[1]}</td><td>${x[2]}</td>${act}</tr>`;
+  };
+  app.innerHTML=`<h1>Thành viên</h1><p class="mu">Xếp theo tổng điểm.</p><div class="tw"><table><thead><tr><th>Hạng</th><th>Tên đăng nhập</th><th>Bài đã giải</th><th>Điểm</th>${ADMIN?"<th></th>":""}</tr></thead><tbody>${L.length?L.map(row).join(""):`<tr><td colspan="${ADMIN?5:4}" class="mu">Chưa có thành viên nào.</td></tr>`}</tbody></table></div>`;
+  app.querySelector("tbody").onclick=async e=>{
+    const d=e.target.dataset||{},u=d.ban||d.unban;
+    if(!u)return;
+    if(d.ban&&!confirm("Khóa tài khoản "+u+"? Họ sẽ không đăng nhập hay nộp bài được nữa."))return;
+    const r=await api(d.ban?"/admin/ban":"/admin/unban",{u});
+    if(!r.ok){alert(r.d.error||"Không thực hiện được.");return}
+    await load();route();
+  };
 }
 function submissions(){
   if(!ME){location.hash="#login";return}
