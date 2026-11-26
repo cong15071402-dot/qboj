@@ -1,7 +1,7 @@
 const http=require("http"),fs=require("fs"),path=require("path"),crypto=require("crypto"),zlib=require("zlib");
 const PORT=process.env.PORT||3000,DB=process.env.DATABASE_URL,FILE=path.join(__dirname,"data.json");
 const BUILTIN=JSON.parse(fs.readFileSync(path.join(__dirname,"problems.json"),"utf8"));
-let S={users:{},subs:[],cp:[],hidden:[],admins:{},banned:{},secret:crypto.randomBytes(24).toString("hex")},pool=null;
+let S={users:{},subs:[],cp:[],hidden:[],admins:{},banned:{},nid:0,det:{},detq:[],secret:crypto.randomBytes(24).toString("hex")},pool=null;
 
 /* ---------- lưu trữ: Postgres nếu có DATABASE_URL, nếu không thì file data.json ---------- */
 async function init(){
@@ -64,10 +64,15 @@ const h=s=>esc(s).replace(/\n/g,"<br>");
 
 /* ---------- chấm bài: biên dịch g++ thật qua Judge0 CE, dự phòng Wandbox ---------- */
 const JUDGE0=process.env.JUDGE0_URL||"https://ce.judge0.com";
+const JAUTH=process.env.JUDGE0_TOKEN?{[process.env.JUDGE0_HEADER||"X-Auth-Token"]:process.env.JUDGE0_TOKEN}:{};  // mật khẩu của Judge0 tự dựng
+const POLL0=process.env.JUDGE0_URL?150:350;    // máy chấm riêng trả kết quả nhanh nên hỏi sớm hơn
+const CPU=+process.env.CPU_LIMIT||3;           // giây CPU tối đa cho mỗi test
+let useLim=true;                               // tự tắt nếu Judge0 từ chối giới hạn riêng
+const subBody=(code,input)=>({source_code:code,language_id:54,stdin:input,...(useLim?{cpu_time_limit:CPU,wall_time_limit:CPU*2+2,memory_limit:262144}:{})});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function post(url,body,tries=3){
   for(let k=0;k<tries;k++){
-    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json",...(url.startsWith(JUDGE0)?JAUTH:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
     if((r.status===429||r.status>=500)&&k<tries-1){await sleep(1500*(k+1));continue}
     return r;
   }
@@ -75,12 +80,13 @@ async function post(url,body,tries=3){
 }
 async function runJudge0(code,input){
   const t0=Date.now();
-  const r=await post(JUDGE0+"/submissions?base64_encoded=false",{source_code:code,language_id:54,stdin:input});
+  const r=await post(JUDGE0+"/submissions?base64_encoded=false",subBody(code,input));
   const c=await r.json().catch(()=>({}));
+  if(!r.ok&&useLim&&(r.status===422||r.status===400)){useLim=false;console.error("Judge0 từ chối giới hạn riêng, bỏ giới hạn:",JSON.stringify(c).slice(0,120));return runJudge0(code,input)}
   if(!r.ok||!c.token)throw new Error("judge0 tạo bài "+r.status+" "+JSON.stringify(c).slice(0,150));
-  for(let n=0;n<30;n++){
-    await sleep(1000);
-    const g=await fetch(JUDGE0+"/submissions/"+c.token+"?base64_encoded=false",{signal:AbortSignal.timeout(20000)});
+  for(let n=0;n<40;n++){
+    await sleep(Math.min(1000,POLL0+n*150));
+    const g=await fetch(JUDGE0+"/submissions/"+c.token+"?base64_encoded=false",{headers:JAUTH,signal:AbortSignal.timeout(20000)});
     if(!g.ok){if(g.status===429)await sleep(1500);continue}
     const d=await g.json();
     if(d.status&&d.status.id>2)return verdict(d,t0);
@@ -98,13 +104,14 @@ function verdict(d,t0){
 /* gửi nhiều test trong 1 yêu cầu gộp: ít lượt gọi hơn nên ít bị giới hạn tốc độ */
 async function runBatch(code,inputs){
   const t0=Date.now();
-  const r=await post(JUDGE0+"/submissions/batch?base64_encoded=false",{submissions:inputs.map(i=>({source_code:code,language_id:54,stdin:i}))},4);
-  const toks=await r.json();
+  const r=await post(JUDGE0+"/submissions/batch?base64_encoded=false",{submissions:inputs.map(i=>subBody(code,i))},4);
+  const toks=await r.json().catch(()=>null);
+  if(!r.ok&&useLim&&(r.status===422||r.status===400)){useLim=false;console.error("Judge0 từ chối giới hạn riêng (batch), bỏ giới hạn:",JSON.stringify(toks).slice(0,120));return runBatch(code,inputs)}
   if(!r.ok||!Array.isArray(toks)||toks.some(t=>!t.token))throw new Error("batch "+r.status);
   const tk=toks.map(t=>t.token);
-  for(let n=0;n<30;n++){
-    await sleep(1500);
-    const g=await fetch(JUDGE0+"/submissions/batch?base64_encoded=false&fields=token,stdout,stderr,compile_output,status,time,message&tokens="+tk.join(","));
+  for(let n=0;n<45;n++){
+    await sleep(Math.min(1500,POLL0+150+n*200));
+    const g=await fetch(JUDGE0+"/submissions/batch?base64_encoded=false&fields=token,stdout,stderr,compile_output,status,time,message&tokens="+tk.join(","),{headers:JAUTH});
     if(!g.ok){console.error("batch hỏi kết quả",g.status,(await g.text()).slice(0,150));continue}
     const d=await g.json(),by={};
     if(!d.submissions||!d.submissions.every(x=>x.status&&x.status.id>2))continue;
@@ -133,8 +140,30 @@ function chunks(p){
   p.T.forEach((t,k)=>{if(cur.length&&(cur.length>=10||size+t[0].length>300000)){c.push(cur);cur=[];size=0}cur.push(k);size+=t[0].length});
   if(cur.length)c.push(cur);return c;
 }
+/* ---- trình chấm riêng (service minioj-runner trên Render): nhanh, biên dịch g++ thật ---- */
+const RUNNER_URL=(process.env.RUNNER_URL||"").replace(/\/+$/,""),RUNNER_TOKEN=process.env.RUNNER_TOKEN||"";
+let runnerOkAt=0;
+async function runOwn(p,code){
+  if(Date.now()-runnerOkAt>20000){   // hỏi nhanh xem service đã thức chưa; nếu đang ngủ thì bỏ qua ngay (và việc hỏi cũng đánh thức nó)
+    const h=await fetch(RUNNER_URL+"/healthz",{signal:AbortSignal.timeout(4000)});
+    const j=await h.json().catch(()=>({}));
+    if(!h.ok||!j.ready)throw new Error("runner chưa sẵn sàng");
+    runnerOkAt=Date.now();
+  }
+  const wait=Math.min(120000,20000+p.T.length*(CPU*1000+1000));
+  const r=await fetch(RUNNER_URL+"/judge",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+RUNNER_TOKEN},
+    body:JSON.stringify({code,inputs:p.T.map(t=>t[0]+"\n"),cpu:CPU}),signal:AbortSignal.timeout(wait)});
+  if(!r.ok){runnerOkAt=0;throw new Error("runner "+r.status)}
+  runnerOkAt=Date.now();
+  const d=await r.json();
+  if(d.ce)return [{v:"CE",msg:d.msg||"Lỗi biên dịch",ms:1}];
+  if(!Array.isArray(d.results)||d.results.length!==p.T.length)throw new Error("runner trả dữ liệu sai");
+  return d.results.map(x=>({...x,ms:Math.max(1,Math.round(x.ms||1))}));
+}
 async function judge(p,code){
-  const outs=new Array(p.T.length);let batchOk=true;
+  let outs=null;
+  if(RUNNER_URL&&RUNNER_TOKEN){try{outs=await runOwn(p,code)}catch(e){console.error("trình chấm riêng lỗi, chuyển sang Judge0:",e.message)}}
+  if(!outs){outs=new Array(p.T.length);let batchOk=true;
   for(const c of chunks(p)){
     if(batchOk){
       try{const rs=await runBatch(code,c.map(k=>p.T[k][0]+"\n"));c.forEach((k,j)=>outs[k]=rs[j])}
@@ -142,7 +171,7 @@ async function judge(p,code){
     }
     if(!batchOk)for(const k of c){if(!outs[k]){outs[k]=await runCpp(code,p.T[k][0]+"\n");await sleep(400)}}
     if(outs[c[0]]&&outs[c[0]].v==="CE")break;
-  }
+  }}
   const r=[];let v="AC",msg="",maxms=0;
   const ce=outs.find(x=>x&&x.v==="CE");
   if(ce){p.T.forEach(()=>r.push("CE"));return{v:"CE",msg:ce.msg,r,okc:0,n:p.T.length,ms:ce.ms}}
@@ -223,6 +252,13 @@ const srv=http.createServer({maxHeaderSize:8192},async(req,res)=>{
 
     if(!me)return raw?send(403,{error:"Tài khoản của bạn đã bị khóa bởi quản trị viên."}):send(401,{error:"Bạn cần đăng nhập."});
 
+    if(url==="/api/sub"){
+      const id=+new URL(full,"http://x").searchParams.get("id"),sub=S.subs.find(x=>x.id===id);
+      if(!sub)return send(404,{error:"Không tìm thấy bài nộp."});
+      if(sub.u!==me&&!isAdmin(me))return send(403,{error:"Bạn chỉ xem được bài nộp của mình."});
+      const d=Object.hasOwn(S.det,id)?S.det[id]:null;
+      return send(200,{sub,code:d?d.code:null,r:d?d.r:null,msg:d?d.msg:""});
+    }
     if(url==="/api/admin/unlock"){
       const k="A:"+ip+":"+me;
       if(cnt(k,9e5)>=5||cnt("AI:"+ip,9e5)>=15)return send(429,{admin:isAdmin(me)});
@@ -252,7 +288,7 @@ const srv=http.createServer({maxHeaderSize:8192},async(req,res)=>{
       if(i>=0)S.cp.splice(i,1);
       else if(BUILTIN.some(p=>p.id===id)&&!S.hidden.includes(id))S.hidden.push(id);
       else return send(404,{error:"Không tìm thấy bài."});
-      S.subs=S.subs.filter(x=>x.p!==id);await save();return send(200,{ok:1});
+      const gone=S.subs.filter(x=>x.p===id).map(x=>x.id);S.subs=S.subs.filter(x=>x.p!==id);gone.forEach(g=>delete S.det[g]);S.detq=S.detq.filter(g=>!gone.includes(g));await save();return send(200,{ok:1});
     }
     if(url==="/api/problem"){
       if(!isAdmin(me))return send(403,{error:"Chỉ quản trị viên mới được đăng bài."});
@@ -277,7 +313,9 @@ const srv=http.createServer({maxHeaderSize:8192},async(req,res)=>{
       last[me]=Date.now();active++;
       let result;
       try{result=await judge(p,code)}catch(e){console.error("judge:",e.message);return send(503,{error:"Máy chủ chấm bài đang bận hoặc lỗi. Thử lại sau ít phút (lần nộp này chưa được tính)."})}finally{active--}
-      const sub={u:me,p:p.id,v:result.v,ok:result.okc,n:result.n,ms:result.ms,at:new Date().toISOString()};
+      const sub={id:++S.nid,u:me,p:p.id,v:result.v,ok:result.okc,n:result.n,ms:result.ms,at:new Date().toISOString()};
+      S.det[sub.id]={code:code.slice(0,30000),r:result.r,msg:String(result.msg||"").slice(0,2000)};S.detq.push(sub.id);
+      while(S.detq.length>150)delete S.det[S.detq.shift()];
       S.subs.unshift(sub);S.subs=S.subs.slice(0,5000);await save();
       return send(200,{result,sub});
     }
@@ -285,5 +323,5 @@ const srv=http.createServer({maxHeaderSize:8192},async(req,res)=>{
   }catch(e){console.error(e);send(400,{error:"Yêu cầu không hợp lệ."})}
 });
 srv.headersTimeout=15000;srv.requestTimeout=20000;srv.keepAliveTimeout=5000;srv.maxConnections=500;
-init().then(()=>srv.listen(PORT,()=>console.log("MiniOJ chạy ở cổng",PORT,DB?"(Postgres)":"(file data.json)","| admin:",[...ADMINS].join(",")||"(không)","| mã admin:",CODE?"đã đặt":"CHƯA ĐẶT")))
+init().then(()=>srv.listen(PORT,()=>console.log("MiniOJ chạy ở cổng",PORT,DB?"(Postgres)":"(file data.json)","| admin:",[...ADMINS].join(",")||"(không)","| mã admin:",CODE?"đã đặt":"CHƯA ĐẶT","| trình chấm riêng:",RUNNER_URL&&RUNNER_TOKEN?RUNNER_URL:"không (dùng Judge0)")))
   .catch(e=>{console.error("Không khởi động được:",e.message);process.exit(1)});
